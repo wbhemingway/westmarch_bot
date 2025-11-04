@@ -1,4 +1,12 @@
+import asyncio
+
 from utils.sheet_manager import SheetManager
 
-manager = SheetManager("credentials.json", "TSI 2024 WorkBook Dev")
-manager.char_sheet.update_cell(3, 2, "Hello World!")
+
+async def test():
+    manager = SheetManager("credentials.json", "TSI 2024 WorkBook Dev")
+    data = await manager.get_character_information("1")
+    print(data)
+
+
+asyncio.run(test())
