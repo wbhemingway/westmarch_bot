@@ -27,16 +27,24 @@ class SheetManager:
 
     async def get_character_row(self, player_id):
         try:
-            cell = await self.char_sheet.find(player_id)
+            cell = await asyncio.to_thread(self.char_sheet.find, player_id)
             row = cell.row
             return row
         except Exception as e:
             print(f"error in get_char_row: {e}")
             return None
 
-    async def get_character_information(self, player_id):
+    async def get_character_information(self, player_id: str):
         row_num = await self.get_character_row(player_id)
         if not row_num:
             return None
-        row_data = await self.char_sheet.row_values(row_num)
+        row_data = await asyncio.to_thread(self.char_sheet.row_values, row_num)
         return row_data
+
+    async def set_character_currency(self, player_id: str, new_curr: int):
+        row_num = await self.get_character_row(player_id)
+        if not row_num:
+            return None
+        await asyncio.to_thread(
+            self.char_sheet.update_cell, row_num, CURRENCY_COL, str(new_curr)
+        )
