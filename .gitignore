@@ -12,3 +12,4 @@ wheels/
 # other
 *.env
 credentials.json
+*.log
