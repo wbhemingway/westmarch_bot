@@ -1,5 +1,7 @@
+import asyncio
 from unittest.mock import MagicMock, patch
 
+import gspread
 import pytest
 
 import config
@@ -54,9 +56,11 @@ async def test_connect_success(manager_and_mocks):
 @pytest.mark.parametrize(
     "level, expected_gold",
     [
-        (3, 0),
-        (5, config.GP_PER_GAME_T1 * 2),
-        (9, (config.GP_PER_GAME_T1 * 2) + (config.GP_PER_GAME_T2 * 4)),
+        (3, 200),
+        (5, 1200),
+        (9, 9200),
+        (2, 0),  # Edge case: level below starting range
+        (20, 135200),  # Edge case: max level in config
     ],
 )
 async def test_get_starting_gold(manager_and_mocks, level, expected_gold):
@@ -149,6 +153,29 @@ async def test_create_new_character_success(manager_and_mocks):
     assert appended_row[5] == str(start_lvl)
 
 
+async def test_create_new_character_default_start_level(manager_and_mocks):
+    """Test creating a character uses the default start level when none is provided."""
+    manager, mock_worksheet = manager_and_mocks
+    mock_worksheet.get_all_records.return_value = []
+    new_player_id = 54321
+    new_char_name = "DefaultLvl"
+
+    # Call with start_lvl=None
+    char = await manager.create_new_character(new_char_name, new_player_id, None)
+
+    assert char.lvl == config.STARTING_LEVEL
+
+    mock_worksheet.append_row.assert_called_once()
+    appended_row = mock_worksheet.append_row.call_args[0][0]
+
+    expected_xp = (config.STARTING_LEVEL - 1) * config.XP_PER_LEVEL
+    expected_gold = await manager._get_starting_gold(config.STARTING_LEVEL)
+
+    assert appended_row[3] == str(expected_gold)
+    assert appended_row[4] == str(expected_xp)
+    assert appended_row[5] == str(config.STARTING_LEVEL)
+
+
 async def test_create_new_character_already_exists(manager_and_mocks):
     """Test that creating a duplicate character raises CharacterAlreadyExists."""
     manager, mock_worksheet = manager_and_mocks
@@ -159,3 +186,15 @@ async def test_create_new_character_already_exists(manager_and_mocks):
 
     with pytest.raises(CharacterAlreadyExists):
         await manager.create_new_character("Another Name", player_id, 5)
+
+
+async def test_create_new_character_id_is_unique(manager_and_mocks):
+    """Test that two consecutively created characters have different IDs."""
+    manager, mock_worksheet = manager_and_mocks
+    mock_worksheet.get_all_records.return_value = []
+
+    # Because of the lock, time.time() will be different for each call in the real implementation.
+    char1 = await manager.create_new_character("char1", 1, 5)
+    char2 = await manager.create_new_character("char2", 2, 5)
+
+    assert char1.char_id != char2.char_id

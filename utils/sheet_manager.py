@@ -77,6 +77,9 @@ class SheetManager:
         return exp // config.XP_PER_LEVEL + 1
 
     async def _get_starting_gold(self, lvl: int) -> int:
+        if lvl < 3:
+            return 0
+
         level_to_gold_map = {
             **{level: config.GP_PER_GAME_T1 for level in config.T1_SET},
             **{level: config.GP_PER_GAME_T2 for level in config.T2_SET},
@@ -85,9 +88,9 @@ class SheetManager:
             **{level: config.GP_PER_GAME_T5 for level in config.T5_SET},
         }
 
-        total_gold = 0
+        total_gold = config.STARTING_GOLD
         for level in range(3, lvl):
-            total_gold += level_to_gold_map.get(level, 0)
+            total_gold += level_to_gold_map.get(level, 0) * 4
 
         return total_gold
 
@@ -195,6 +198,7 @@ class SheetManager:
 
                 # Generate a unique ID based on the current timestamp
                 char_id = int(time.time() * 1000)
+                char_id = int(time.time() * 1_000_000)
 
                 starting_xp = (final_start_lvl - 1) * config.XP_PER_LEVEL
                 starting_gold = await self._get_starting_gold(final_start_lvl)
