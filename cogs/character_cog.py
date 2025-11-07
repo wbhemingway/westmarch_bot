@@ -1,13 +1,16 @@
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-import logging
-
-from utils.exceptions import CharacterNotFound
 from bot import DnDBot
+from utils.embeds import create_character_embed
+from utils.exceptions import CharacterNotFound
 
 logger = logging.getLogger(__name__)
+
+
 class CharacterCog(commands.Cog):
     def __init__(self, bot: DnDBot):
         self.bot = bot
@@ -23,37 +26,9 @@ class CharacterCog(commands.Cog):
         try:
             player_id = interaction.user.id
 
-            char_data = await self.sheet_manager.get_character_information(
-                player_id
-            )
+            char_data = await self.sheet_manager.get_character_information(player_id)
 
-
-            char_name = char_data.name
-
-            embed = discord.Embed(
-                title=f"Character Stats: {char_name}", color=discord.Color.blue()
-            )
-            embed.set_author(
-                name=interaction.user.display_name, icon_url=interaction.user.avatar.url
-            )
-
-            embed.add_field(
-                name="Level", value=str(char_data.lvl), inline=True
-            )
-            embed.add_field(
-                name="XP", value=str(char_data.xp), inline=True
-            )
-            embed.add_field(
-                name="Currency",
-                value=f"{char_data.cur}",
-                inline=True,
-            )
-
-            embed.add_field(
-                name="Character ID",
-                value=f"`{char_data.char_id}`",
-                inline=False,
-            )
+            embed = create_character_embed(interaction, char_data, "Character Stats")
 
             await interaction.followup.send(embed=embed)
         except CharacterNotFound:
@@ -62,7 +37,9 @@ class CharacterCog(commands.Cog):
                 "Contact a staff member to get a character"
             )
         except Exception as e:
-            logger.error(f"Error in character_info command for {player_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error in character_info command for {player_id}: {e}", exc_info=True
+            )
             await interaction.followup.send(
                 "An error occurred while fetching your data. Please contact a staff member."
             )

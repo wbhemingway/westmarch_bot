@@ -1,7 +1,6 @@
 import asyncio
 import logging
-import random
-import string
+import time
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -14,6 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 class SheetManager:
+    # Character sheet header names
+    C_H_PLAYER_ID = "player id"
+    C_H_CHAR_NAME = "character name"
+    C_H_CHAR_ID = "character id"
+    C_H_CURRENCY = "currency"
+    C_H_XP = "experience"
+    C_H_LEVEL = "level"
+
     def __init__(self, credentials_file: str, sheet_name: str):
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -29,21 +36,13 @@ class SheetManager:
 
         self.lock = asyncio.Lock()
 
-        # Character sheet header names
-        self.C_H_PLAYER_ID = "player id"
-        self.C_H_CHAR_NAME = "character name"
-        self.C_H_CHAR_ID = "character id"
-        self.C_H_CURRENCY = "currency"
-        self.C_H_XP = "experience"
-        self.C_H_LEVEL = "level"
-
         # Character sheet column indexes
         self.c_player_id = None
         self.c_char_name = None
         self.c_char_id = None
-        self.c_col_currency = None
-        self.c_col_xp = None
-        self.c_col_level = None
+        self.c_currency = None
+        self.c_xp = None
+        self.c_level = None
 
     async def _connect(self):
         """
@@ -59,14 +58,13 @@ class SheetManager:
 
             logger.info("SheetManager connecting and loading header indexes...")
             headers = await asyncio.to_thread(self.char_sheet.row_values, 1)
-            print(headers)
 
             self.c_player_id = headers.index(self.C_H_PLAYER_ID) + 1
             self.c_char_name = headers.index(self.C_H_CHAR_NAME) + 1
             self.c_char_id = headers.index(self.C_H_CHAR_ID) + 1
-            self.col_currency = headers.index(self.C_H_CURRENCY) + 1
-            self.col_xp = headers.index(self.C_H_XP) + 1
-            self.col_level = headers.index(self.C_H_LEVEL) + 1
+            self.c_currency = headers.index(self.C_H_CURRENCY) + 1
+            self.c_xp = headers.index(self.C_H_XP) + 1
+            self.c_level = headers.index(self.C_H_LEVEL) + 1
             logger.info("SheetManager connection successful.")
 
         except Exception as e:
@@ -75,13 +73,31 @@ class SheetManager:
             )
             raise e
 
+    async def _getlvl(self, exp: int) -> int:
+        return exp // config.XP_PER_LEVEL + 1
+
+    async def _get_starting_gold(self, lvl: int) -> int:
+        level_to_gold_map = {
+            **{level: config.GP_PER_GAME_T1 for level in config.T1_SET},
+            **{level: config.GP_PER_GAME_T2 for level in config.T2_SET},
+            **{level: config.GP_PER_GAME_T3 for level in config.T3_SET},
+            **{level: config.GP_PER_GAME_T4 for level in config.T4_SET},
+            **{level: config.GP_PER_GAME_T5 for level in config.T5_SET},
+        }
+
+        total_gold = 0
+        for level in range(3, lvl):
+            total_gold += level_to_gold_map.get(level, 0)
+
+        return total_gold
+
     async def _record_to_character(self, record: dict) -> Character:
         """
         Helper to turn a record dict into a Character class.
         """
         char = Character(
             player_id=int(record[self.C_H_PLAYER_ID]),
-            char_id=str(record[self.C_H_CHAR_ID]),
+            char_id=int(record[self.C_H_CHAR_ID]),
             name=str(record[self.C_H_CHAR_NAME]),
             lvl=int(record[self.C_H_LEVEL]),
             xp=int(record[self.C_H_XP]),
@@ -94,32 +110,13 @@ class SheetManager:
         Helper to search a list of records for a player ID.
         """
         for record in records:
-            if record[self.C_H_PLAYER_ID] == player_id:
+            if int(record[self.C_H_PLAYER_ID]) == player_id:
                 return record
         return None
 
-    async def get_character_row(self, player_id: str | int):
-        try:
-            cell = await asyncio.to_thread(self.char_sheet.find, str(player_id))
-            row = cell.row
-            return row
-        except gspread.exceptions.CellNotFound:
-            logger.warning(
-                f"Character lookup failed: No cell found for player ID {player_id}"
-            )
-            raise CharacterNotFound(
-                f"No character found associated with Player ID {player_id}"
-            )
-        except Exception as e:
-            logger.error(
-                f"Unexpected error in get_character_row for player_id {player_id}: {e}",
-                exc_info=True,
-            )
-            raise e
-
     async def get_character_information(self, player_id: int) -> Character:
         """
-        Gets all information for a character as a dictionary.
+        Gets all information for a character as a Character object.
         """
         async with self.lock:
             try:
@@ -147,19 +144,28 @@ class SheetManager:
         """
         async with self.lock:
             try:
-                cell = await asyncio.to_thread(self.char_sheet.find, str(player_id))
+                all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
+                record_index = next(
+                    (
+                        i
+                        for i, record in enumerate(all_records)
+                        if int(record[self.C_H_PLAYER_ID]) == player_id
+                    ),
+                    -1,
+                )
+
+                if record_index == -1:
+                    raise CharacterNotFound(f"No character found with ID {player_id}")
+
+                # +2 to account for header row and 0-based index
+                row_to_update = record_index + 2
                 await asyncio.to_thread(
                     self.char_sheet.update_cell,
-                    cell.row,
-                    config.CURRENCY_COL,
+                    row_to_update,
+                    self.c_currency,
                     str(new_curr),
                 )
                 logger.info(f"Updated currency for player {player_id} to {new_curr}")
-            except gspread.exceptions.CellNotFound:
-                logger.warning(
-                    f"set_character_currency failed: No cell found for player ID {player_id}"
-                )
-                raise CharacterNotFound(f"No character found with ID {player_id}")
             except Exception as e:
                 logger.error(
                     f"Unexpected error in set_character_currency for {player_id}: {e}",
@@ -171,15 +177,15 @@ class SheetManager:
         self,
         char_name: str,
         player_id: int,
-        starting_curr: int,
-        starting_exp: int,
-        starting_lvl: int,
+        start_lvl: int | None = None,
     ) -> Character:
         """
-        Creates a new character row.
+        Creates a new character in the sheet and returns its data as a Character object.
         """
         async with self.lock:
             try:
+                final_start_lvl = start_lvl or config.STARTING_LEVEL
+
                 all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
                 existing = await self._find_record(player_id, all_records)
                 if existing:
@@ -187,25 +193,29 @@ class SheetManager:
                         f"Player {player_id} already has a character: {existing[self.C_H_CHAR_NAME]}"
                     )
 
-                characters = string.ascii_uppercase + string.digits
-                char_id = "".join(random.choice(characters) for _ in range(18))
+                # Generate a unique ID based on the current timestamp
+                char_id = int(time.time() * 1000)
+
+                starting_xp = (final_start_lvl - 1) * config.XP_PER_LEVEL
+                starting_gold = await self._get_starting_gold(final_start_lvl)
 
                 data_row = [
                     char_name,
                     player_id,
                     char_id,
-                    str(starting_curr),
-                    str(starting_exp),
-                    str(starting_lvl),
+                    starting_gold,
+                    starting_xp,
+                    final_start_lvl,
                 ]
+                data_row = [str(i) for i in data_row]
                 await asyncio.to_thread(self.char_sheet.append_row, data_row)
                 new_char_data = {
                     self.C_H_CHAR_NAME: char_name,
                     self.C_H_PLAYER_ID: player_id,
                     self.C_H_CHAR_ID: char_id,
-                    self.C_H_CURRENCY: starting_curr,
-                    self.C_H_XP: starting_exp,
-                    self.C_H_LEVEL: starting_lvl,
+                    self.C_H_CURRENCY: starting_gold,
+                    self.C_H_XP: starting_xp,
+                    self.C_H_LEVEL: final_start_lvl,
                 }
                 logger.info(
                     f"Created new character '{char_name}' for player {player_id}"
