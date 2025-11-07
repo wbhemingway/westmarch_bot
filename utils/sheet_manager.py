@@ -8,6 +8,7 @@ from google.oauth2.service_account import Credentials
 
 import config
 from utils.exceptions import CharacterAlreadyExists, CharacterNotFound
+from utils.models import Character
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,6 @@ class SheetManager:
     async def _connect(self):
         """
         Asynchronously connects to Google Sheets and loads column indexes.
-        This is "lazy loaded" on the startup.
         """
 
         try:
@@ -61,7 +61,6 @@ class SheetManager:
             headers = await asyncio.to_thread(self.char_sheet.row_values, 1)
             print(headers)
 
-            # .index() is 0-based, gspread columns are 1-based
             self.c_player_id = headers.index(self.C_H_PLAYER_ID) + 1
             self.c_char_name = headers.index(self.C_H_CHAR_NAME) + 1
             self.c_char_id = headers.index(self.C_H_CHAR_ID) + 1
@@ -75,6 +74,20 @@ class SheetManager:
                 f"Failed to connect to Google Sheet or find headers: {e}", exc_info=True
             )
             raise e
+
+    async def _record_to_character(self, record: dict) -> Character:
+        """
+        Helper to turn a record dict into a Character class.
+        """
+        char = Character(
+            player_id=int(record[self.C_H_PLAYER_ID]),
+            char_id=str(record[self.C_H_CHAR_ID]),
+            name=str(record[self.C_H_CHAR_NAME]),
+            lvl=int(record[self.C_H_LEVEL]),
+            xp=int(record[self.C_H_XP]),
+            cur=int(record[self.C_H_CURRENCY]),
+        )
+        return char
 
     async def _find_record(self, player_id: int, records: list[dict]) -> dict | None:
         """
@@ -104,7 +117,7 @@ class SheetManager:
             )
             raise e
 
-    async def get_character_information(self, player_id: str | int):
+    async def get_character_information(self, player_id: int) -> Character:
         """
         Gets all information for a character as a dictionary.
         """
@@ -118,7 +131,8 @@ class SheetManager:
             record = await self._find_record(player_id, all_records)
 
             if record:
-                return record
+                char = await self._record_to_character(record)
+                return char
             else:
                 logger.warning(
                     f"Character lookup failed: No record found for player ID {player_id}"
@@ -160,7 +174,7 @@ class SheetManager:
         starting_curr: int,
         starting_exp: int,
         starting_lvl: int,
-    ) -> dict:
+    ) -> Character:
         """
         Creates a new character row.
         """
@@ -196,7 +210,8 @@ class SheetManager:
                 logger.info(
                     f"Created new character '{char_name}' for player {player_id}"
                 )
-                return new_char_data
+                new_char = await self._record_to_character(new_char_data)
+                return new_char
             except CharacterAlreadyExists:
                 logger.warning(
                     f"Attempted to create duplicate character for {player_id}"

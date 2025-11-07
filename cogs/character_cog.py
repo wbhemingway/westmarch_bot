@@ -28,7 +28,7 @@ class CharacterCog(commands.Cog):
             )
 
 
-            char_name = char_data[self.sheet_manager.C_H_CHAR_NAME]
+            char_name = char_data.name
 
             embed = discord.Embed(
                 title=f"Character Stats: {char_name}", color=discord.Color.blue()
@@ -38,20 +38,20 @@ class CharacterCog(commands.Cog):
             )
 
             embed.add_field(
-                name="Level", value=str(char_data[self.sheet_manager.C_H_LEVEL]), inline=True
+                name="Level", value=str(char_data.lvl), inline=True
             )
             embed.add_field(
-                name="XP", value=str(char_data[self.sheet_manager.C_H_XP]), inline=True
+                name="XP", value=str(char_data.xp), inline=True
             )
             embed.add_field(
                 name="Currency",
-                value=f"{char_data[self.sheet_manager.C_H_CURRENCY]}",
+                value=f"{char_data.cur}",
                 inline=True,
             )
 
             embed.add_field(
                 name="Character ID",
-                value=f"`{char_data[self.sheet_manager.C_H_CHAR_ID]}`",
+                value=f"`{char_data.char_id}`",
                 inline=False,
             )
 

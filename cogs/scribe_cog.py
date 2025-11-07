@@ -54,30 +54,28 @@ class ScribeCog(commands.Cog):
 
             embed.add_field(
                 name="Name",
-                value=char_data[self.sheet_manager.C_H_CHAR_NAME],
+                value=char_data.name,
                 inline=True,
             )
             embed.add_field(
                 name="Level",
-                value=str(char_data[self.sheet_manager.C_H_LEVEL]),
+                value=str(char_data.lvl),
                 inline=True,
             )
-            embed.add_field(
-                name="XP", value=str(char_data[self.sheet_manager.C_H_XP]), inline=True
-            )
+            embed.add_field(name="XP", value=str(char_data.xp), inline=True)
             embed.add_field(
                 name="Currency",
-                value=f"{char_data[self.sheet_manager.C_H_CURRENCY]}",
+                value=f"{char_data.cur}",
                 inline=True,
             )
             embed.add_field(
                 name="Character ID",
-                value=f"`{char_data[self.sheet_manager.C_H_CHAR_ID]}`",
+                value=f"`{char_data.char_id}`",
                 inline=False,
             )
             embed.add_field(
                 name="Player ID",
-                value=f"`{char_data[self.sheet_manager.C_H_PLAYER_ID]}`",
+                value=f"`{char_data.player_id}`",
                 inline=False,
             )
 
