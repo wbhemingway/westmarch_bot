@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import date
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -24,6 +25,13 @@ class SheetManager:
     I_H_ITEM_NAME = "item name"
     I_H_COST = "cost"
     I_H_MAGIC_RARITY = "rarity"
+    # MarketLog header names
+    M_DATE = "date"
+    M_CHAR_ID = "character id"
+    M_ITEM_NAME = "item name"
+    M_PRICE = "price"
+    M_QUANTITY = "quantity"
+    M_NOTES = "notes"
 
     def __init__(self, credentials_file: str, sheet_name: str):
         scopes = [
@@ -38,6 +46,7 @@ class SheetManager:
         self.workbook = None
         self.char_sheet = None
         self.item_sheet = None
+        self.market_sheet = None
 
         self.lock = asyncio.Lock()
 
@@ -52,8 +61,15 @@ class SheetManager:
         self.i_name = None
         self.i_cost = None
         self.i_rarity = None
+        # MarketLog column indexes
+        self.m_date = None
+        self.m_char_id = None
+        self.m_item_name = None
+        self.m_price = None
+        self.m_quantity = None
+        self.m_notes = None
 
-    async def _connect(self):
+    async def connect(self):
         """
         Asynchronously connects to Google Sheets and loads column indexes.
         """
@@ -65,6 +81,9 @@ class SheetManager:
                 self.workbook.worksheet, "Characters"
             )
             self.item_sheet = await asyncio.to_thread(self.workbook.worksheet, "Items")
+            self.market_sheet = await asyncio.to_thread(
+                self.workbook.worksheet, "MarketLog"
+            )
 
             logger.info("SheetManager connecting and loading header indexes...")
             c_headers = await asyncio.to_thread(self.char_sheet.row_values, 1)
@@ -81,6 +100,14 @@ class SheetManager:
             self.i_name = i_headers.index(self.I_H_ITEM_NAME) + 1
             self.i_rarity = i_headers.index(self.I_H_MAGIC_RARITY) + 1
             logger.info("SheetManager connection successful.")
+
+            m_headers = await asyncio.to_thread(self.market_sheet.row_values, 1)
+            self.m_date = m_headers.index(self.M_DATE) + 1
+            self.m_char_id = m_headers.index(self.M_CHAR_ID) + 1
+            self.m_item_name = m_headers.index(self.M_ITEM_NAME) + 1
+            self.m_price = m_headers.index(self.M_PRICE) + 1
+            self.m_quantity = m_headers.index(self.M_QUANTITY) + 1
+            self.m_notes = m_headers.index(self.M_NOTES) + 1
 
         except Exception as e:
             logger.error(
@@ -289,5 +316,30 @@ class SheetManager:
                 logger.error(
                     f"Unexpected error in crate_new_character for player_id : {e}",
                     exc_info=True,
+                )
+                raise e
+
+    async def new_market_log_entry(
+        self,
+        char_info: Character,
+        item: Item,
+        quantity: int = 1,
+        notes: str = "standard",
+    ):
+        async with self.lock:
+            try:
+                cur_date = date.today().strftime("%Y-%m-%d")
+                data_row = [
+                    cur_date,
+                    char_info.char_id,
+                    item.name,
+                    item.cost,
+                    quantity,
+                    notes,
+                ]
+                await asyncio.to_thread(self.market_sheet.append_row, data_row)
+            except Exception as e:
+                logger.error(
+                    f"Unexpected error in new_market_log_entry: {e}", exc_info=True
                 )
                 raise e

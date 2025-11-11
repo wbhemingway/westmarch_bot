@@ -83,6 +83,9 @@ class CharacterCog(commands.Cog):
             await self.sheet_manager.set_character_currency(
                 player_id, player_gold - item.cost
             )
+            await self.sheet_manager.new_market_log_entry(
+                player_info, item, 1, "Player Bought"
+            )
             await interaction.followup.send(f"You successfully bought {item.name}!")
         except InsufficientFunds:
             await interaction.followup.send(

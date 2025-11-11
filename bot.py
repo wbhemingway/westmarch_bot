@@ -49,7 +49,7 @@ class DnDBot(commands.Bot):
 
         try:
             self.logger.info("Attempting to connect to Google Sheets...")
-            await self.sheet_manager._connect()
+            await self.sheet_manager.connect()
             self.logger.info("SheetManager connection successful.")
         except Exception as e:
             self.logger.critical(
