@@ -56,6 +56,7 @@ class DnDBot(commands.Bot):
                 f"FATAL: Failed to connect to Google Sheets: {e}", exc_info=True
             )
             await self.close()
+            return
 
         await self.load_cogs()
 

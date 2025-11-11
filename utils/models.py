@@ -9,3 +9,9 @@ class Character:
     xp: int
     lvl: int
     cur: int
+
+@dataclass
+class Item:
+    name: str
+    cost: int
+    rarity: str

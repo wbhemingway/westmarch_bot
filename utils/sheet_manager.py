@@ -6,8 +6,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 import config
-from utils.exceptions import CharacterAlreadyExists, CharacterNotFound
-from utils.models import Character
+from utils.exceptions import CharacterAlreadyExists, CharacterNotFound, ItemNotFound
+from utils.models import Character, Item
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,10 @@ class SheetManager:
     C_H_CURRENCY = "currency"
     C_H_XP = "experience"
     C_H_LEVEL = "level"
+    # Item sheet header names
+    I_H_ITEM_NAME = "item name"
+    I_H_COST = "cost"
+    I_H_MAGIC_RARITY = "rarity"
 
     def __init__(self, credentials_file: str, sheet_name: str):
         scopes = [
@@ -33,6 +37,7 @@ class SheetManager:
         self.client = None
         self.workbook = None
         self.char_sheet = None
+        self.item_sheet = None
 
         self.lock = asyncio.Lock()
 
@@ -43,6 +48,10 @@ class SheetManager:
         self.c_currency = None
         self.c_xp = None
         self.c_level = None
+        # Item sheet column indexes
+        self.i_name = None
+        self.i_cost = None
+        self.i_rarity = None
 
     async def _connect(self):
         """
@@ -55,16 +64,22 @@ class SheetManager:
             self.char_sheet = await asyncio.to_thread(
                 self.workbook.worksheet, "Characters"
             )
+            self.item_sheet = await asyncio.to_thread(self.workbook.worksheet, "Items")
 
             logger.info("SheetManager connecting and loading header indexes...")
-            headers = await asyncio.to_thread(self.char_sheet.row_values, 1)
+            c_headers = await asyncio.to_thread(self.char_sheet.row_values, 1)
 
-            self.c_player_id = headers.index(self.C_H_PLAYER_ID) + 1
-            self.c_char_name = headers.index(self.C_H_CHAR_NAME) + 1
-            self.c_char_id = headers.index(self.C_H_CHAR_ID) + 1
-            self.c_currency = headers.index(self.C_H_CURRENCY) + 1
-            self.c_xp = headers.index(self.C_H_XP) + 1
-            self.c_level = headers.index(self.C_H_LEVEL) + 1
+            self.c_player_id = c_headers.index(self.C_H_PLAYER_ID) + 1
+            self.c_char_name = c_headers.index(self.C_H_CHAR_NAME) + 1
+            self.c_char_id = c_headers.index(self.C_H_CHAR_ID) + 1
+            self.c_currency = c_headers.index(self.C_H_CURRENCY) + 1
+            self.c_xp = c_headers.index(self.C_H_XP) + 1
+            self.c_level = c_headers.index(self.C_H_LEVEL) + 1
+
+            i_headers = await asyncio.to_thread(self.item_sheet.row_values, 1)
+            self.i_cost = i_headers.index(self.I_H_COST) + 1
+            self.i_name = i_headers.index(self.I_H_ITEM_NAME) + 1
+            self.i_rarity = i_headers.index(self.I_H_MAGIC_RARITY) + 1
             logger.info("SheetManager connection successful.")
 
         except Exception as e:
@@ -116,6 +131,47 @@ class SheetManager:
             if int(record[self.C_H_PLAYER_ID]) == player_id:
                 return record
         return None
+
+    async def get_all_items(self) -> list[Item]:
+        """
+        Gets all items from the 'Items' worksheet.
+        """
+        async with self.lock:
+            try:
+                all_item_records = await asyncio.to_thread(
+                    self.item_sheet.get_all_records
+                )
+                items = [
+                    Item(
+                        name=rec[self.I_H_ITEM_NAME],
+                        rarity=rec[self.I_H_MAGIC_RARITY],
+                        cost=int(rec[self.I_H_COST]),
+                    )
+                    for rec in all_item_records
+                ]
+                return items
+            except Exception as e:
+                logger.error(f"Failed to get_all_items: {e}", exc_info=True)
+                raise e
+
+    async def get_item(self, item_name: str) -> Item:
+        """
+        Gets a single item by its name from the 'Items' worksheet.
+
+        This method is case-insensitive.
+        """
+        try:
+            all_items = await self.get_all_items()
+            for item in all_items:
+                if item.name.lower() == item_name.lower():
+                    return item
+
+            raise ItemNotFound(f"Item '{item_name}' not found.")
+        except ItemNotFound:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to get_item '{item_name}': {e}", exc_info=True)
+            raise e
 
     async def get_character_information(self, player_id: int) -> Character:
         """
@@ -196,9 +252,7 @@ class SheetManager:
                         f"Player {player_id} already has a character: {existing[self.C_H_CHAR_NAME]}"
                     )
 
-                # Generate a unique ID based on the current timestamp
                 char_id = int(time.time() * 1000)
-                char_id = int(time.time() * 1_000_000)
 
                 starting_xp = (final_start_lvl - 1) * config.XP_PER_LEVEL
                 starting_gold = await self._get_starting_gold(final_start_lvl)
