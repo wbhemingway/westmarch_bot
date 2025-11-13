@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 
 import config
 from utils.exceptions import CharacterAlreadyExists, CharacterNotFound, ItemNotFound
-from utils.models import Character, Item
+from utils.models import Character, Item, MarketLog
 
 logger = logging.getLogger(__name__)
 
@@ -341,5 +341,27 @@ class SheetManager:
             except Exception as e:
                 logger.error(
                     f"Unexpected error in new_market_log_entry: {e}", exc_info=True
+                )
+                raise e
+
+    async def get_all_market_log_entries(self) -> list[MarketLog]:
+        async with self.lock:
+            try:
+                all_records = await asyncio.to_thread(self.market_sheet.get_all_records)
+                records = [
+                    MarketLog(
+                        date=rec[self.M_DATE],
+                        char_id=int(rec[self.M_CHAR_ID]),
+                        item_name=rec[self.M_ITEM_NAME],
+                        price=int(rec[self.M_PRICE]),
+                        quantity=int(rec[self.M_QUANTITY]),
+                        notes=rec[self.M_NOTES],
+                    )
+                    for rec in all_records
+                ]
+                return records
+            except Exception as e:
+                logger.error(
+                    f"Failed to get_all_market_log_entries: {e}", exc_info=True
                 )
                 raise e
