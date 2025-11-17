@@ -7,6 +7,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 import config
+from utils.decorators import with_lock
 from utils.exceptions import CharacterAlreadyExists, CharacterNotFound, ItemNotFound
 from utils.models import Character, Item, MarketLog
 
@@ -159,27 +160,25 @@ class SheetManager:
                 return record
         return None
 
+    @with_lock
     async def get_all_items(self) -> list[Item]:
         """
         Gets all items from the 'Items' worksheet.
         """
-        async with self.lock:
-            try:
-                all_item_records = await asyncio.to_thread(
-                    self.item_sheet.get_all_records
+        try:
+            all_item_records = await asyncio.to_thread(self.item_sheet.get_all_records)
+            items = [
+                Item(
+                    name=rec[self.I_H_ITEM_NAME],
+                    rarity=rec[self.I_H_MAGIC_RARITY],
+                    cost=int(rec[self.I_H_COST]),
                 )
-                items = [
-                    Item(
-                        name=rec[self.I_H_ITEM_NAME],
-                        rarity=rec[self.I_H_MAGIC_RARITY],
-                        cost=int(rec[self.I_H_COST]),
-                    )
-                    for rec in all_item_records
-                ]
-                return items
-            except Exception as e:
-                logger.error(f"Failed to get_all_items: {e}", exc_info=True)
-                raise e
+                for rec in all_item_records
+            ]
+            return items
+        except Exception as e:
+            logger.error(f"Failed to get_all_items: {e}", exc_info=True)
+            raise e
 
     async def get_item(self, item_name: str) -> Item:
         """
@@ -200,65 +199,66 @@ class SheetManager:
             logger.error(f"Failed to get_item '{item_name}': {e}", exc_info=True)
             raise e
 
+    @with_lock
     async def get_character_information(self, player_id: int) -> Character:
         """
         Gets all information for a character as a Character object.
         """
-        async with self.lock:
-            try:
-                all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
-            except Exception as e:
-                logger.error(f"Failed to get_all_records: {e}", exc_info=True)
-                raise e
+        try:
+            all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
+        except Exception as e:
+            logger.error(f"Failed to get_all_records: {e}", exc_info=True)
+            raise e
 
-            record = await self._find_record(player_id, all_records)
+        record = await self._find_record(player_id, all_records)
 
-            if record:
-                char = await self._record_to_character(record)
-                return char
-            else:
-                logger.warning(
-                    f"Character lookup failed: No record found for player ID {player_id}"
-                )
-                raise CharacterNotFound(
-                    f"No character found associated with Player ID {player_id}"
-                )
+        if record:
+            char = await self._record_to_character(record)
+            return char
+        else:
+            logger.warning(
+                f"Character lookup failed: No record found for player ID {player_id}"
+            )
+            raise CharacterNotFound(
+                f"No character found associated with Player ID {player_id}"
+            )
 
+    @with_lock
     async def set_character_currency(self, player_id: int, new_curr: int):
         """
         Updates a character's currency using a lock and a row lookup.
         """
-        async with self.lock:
-            try:
-                all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
-                record_index = next(
-                    (
-                        i
-                        for i, record in enumerate(all_records)
-                        if int(record[self.C_H_PLAYER_ID]) == player_id
-                    ),
-                    -1,
-                )
+        try:
+            all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
+            record_index = next(
+                (
+                    i
+                    for i, record in enumerate(all_records)
+                    if int(record[self.C_H_PLAYER_ID]) == player_id
+                ),
+                -1,
+            )
 
-                if record_index == -1:
-                    raise CharacterNotFound(f"No character found with ID {player_id}")
+            if record_index == -1:
+                raise CharacterNotFound(f"No character found with ID {player_id}")
 
-                # +2 to account for header row and 0-based index
-                row_to_update = record_index + 2
-                await asyncio.to_thread(
-                    self.char_sheet.update_cell,
-                    row_to_update,
-                    self.c_currency,
-                    str(new_curr),
-                )
-                logger.info(f"Updated currency for player {player_id} to {new_curr}")
-            except Exception as e:
-                logger.error(
-                    f"Unexpected error in set_character_currency for {player_id}: {e}",
-                    exc_info=True,
-                )
-                raise e
+            # +2 to account for header row and 0-based index
+            row_to_update = record_index + 2
+            await asyncio.to_thread(
+                self.char_sheet.update_cell,
+                row_to_update,
+                self.c_currency,
+                str(new_curr),
+            )
+            logger.info(f"Updated currency for player {player_id} to {new_curr}")
+        except Exception as e:
+            logger.error(
+                f"Unexpected error in set_character_currency for {player_id}: {e}",
+                exc_info=True,
+            )
+            raise e
 
+    @with_lock
     async def create_new_character(
         self,
         char_name: str,
@@ -268,57 +268,53 @@ class SheetManager:
         """
         Creates a new character in the sheet and returns its data as a Character object.
         """
-        async with self.lock:
-            try:
-                final_start_lvl = start_lvl or config.STARTING_LEVEL
+        try:
+            final_start_lvl = start_lvl or config.STARTING_LEVEL
 
-                all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
-                existing = await self._find_record(player_id, all_records)
-                if existing:
-                    raise CharacterAlreadyExists(
-                        f"Player {player_id} already has a character: {existing[self.C_H_CHAR_NAME]}"
-                    )
-
-                char_id = int(time.time() * 1000)
-
-                starting_xp = (final_start_lvl - 1) * config.XP_PER_LEVEL
-                starting_gold = await self._get_starting_gold(final_start_lvl)
-
-                data_row = [
-                    char_name,
-                    player_id,
-                    char_id,
-                    starting_gold,
-                    starting_xp,
-                    final_start_lvl,
-                ]
-                data_row = [str(i) for i in data_row]
-                await asyncio.to_thread(self.char_sheet.append_row, data_row)
-                new_char_data = {
-                    self.C_H_CHAR_NAME: char_name,
-                    self.C_H_PLAYER_ID: player_id,
-                    self.C_H_CHAR_ID: char_id,
-                    self.C_H_CURRENCY: starting_gold,
-                    self.C_H_XP: starting_xp,
-                    self.C_H_LEVEL: final_start_lvl,
-                }
-                logger.info(
-                    f"Created new character '{char_name}' for player {player_id}"
+            all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
+            existing = await self._find_record(player_id, all_records)
+            if existing:
+                raise CharacterAlreadyExists(
+                    f"Player {player_id} already has a character: {existing[self.C_H_CHAR_NAME]}"
                 )
-                new_char = await self._record_to_character(new_char_data)
-                return new_char
-            except CharacterAlreadyExists:
-                logger.warning(
-                    f"Attempted to create duplicate character for {player_id}"
-                )
-                raise
-            except Exception as e:
-                logger.error(
-                    f"Unexpected error in crate_new_character for player_id : {e}",
-                    exc_info=True,
-                )
-                raise e
 
+            char_id = int(time.time() * 1000)
+
+            starting_xp = (final_start_lvl - 1) * config.XP_PER_LEVEL
+            starting_gold = await self._get_starting_gold(final_start_lvl)
+
+            data_row = [
+                char_name,
+                player_id,
+                char_id,
+                starting_gold,
+                starting_xp,
+                final_start_lvl,
+            ]
+            data_row = [str(i) for i in data_row]
+            await asyncio.to_thread(self.char_sheet.append_row, data_row)
+            new_char_data = {
+                self.C_H_CHAR_NAME: char_name,
+                self.C_H_PLAYER_ID: player_id,
+                self.C_H_CHAR_ID: char_id,
+                self.C_H_CURRENCY: starting_gold,
+                self.C_H_XP: starting_xp,
+                self.C_H_LEVEL: final_start_lvl,
+            }
+            logger.info(f"Created new character '{char_name}' for player {player_id}")
+            new_char = await self._record_to_character(new_char_data)
+            return new_char
+        except CharacterAlreadyExists:
+            logger.warning(f"Attempted to create duplicate character for {player_id}")
+            raise
+        except Exception as e:
+            logger.error(
+                f"Unexpected error in crate_new_character for player_id : {e}",
+                exc_info=True,
+            )
+            raise e
+
+    @with_lock
     async def new_market_log_entry(
         self,
         char_info: Character,
@@ -326,42 +322,39 @@ class SheetManager:
         quantity: int = 1,
         notes: str = "standard",
     ):
-        async with self.lock:
-            try:
-                cur_date = date.today().strftime("%Y-%m-%d")
-                data_row = [
-                    cur_date,
-                    char_info.char_id,
-                    item.name,
-                    item.cost,
-                    quantity,
-                    notes,
-                ]
-                await asyncio.to_thread(self.market_sheet.append_row, data_row)
-            except Exception as e:
-                logger.error(
-                    f"Unexpected error in new_market_log_entry: {e}", exc_info=True
-                )
-                raise e
+        try:
+            cur_date = date.today().strftime("%Y-%m-%d")
+            data_row = [
+                cur_date,
+                char_info.char_id,
+                item.name,
+                item.cost,
+                quantity,
+                notes,
+            ]
+            await asyncio.to_thread(self.market_sheet.append_row, data_row)
+        except Exception as e:
+            logger.error(
+                f"Unexpected error in new_market_log_entry: {e}", exc_info=True
+            )
+            raise e
 
+    @with_lock
     async def get_all_market_log_entries(self) -> list[MarketLog]:
-        async with self.lock:
-            try:
-                all_records = await asyncio.to_thread(self.market_sheet.get_all_records)
-                records = [
-                    MarketLog(
-                        date=rec[self.M_DATE],
-                        char_id=int(rec[self.M_CHAR_ID]),
-                        item_name=rec[self.M_ITEM_NAME],
-                        price=int(rec[self.M_PRICE]),
-                        quantity=int(rec[self.M_QUANTITY]),
-                        notes=rec[self.M_NOTES],
-                    )
-                    for rec in all_records
-                ]
-                return records
-            except Exception as e:
-                logger.error(
-                    f"Failed to get_all_market_log_entries: {e}", exc_info=True
+        try:
+            all_records = await asyncio.to_thread(self.market_sheet.get_all_records)
+            records = [
+                MarketLog(
+                    date=rec[self.M_DATE],
+                    char_id=int(rec[self.M_CHAR_ID]),
+                    item_name=rec[self.M_ITEM_NAME],
+                    price=int(rec[self.M_PRICE]),
+                    quantity=int(rec[self.M_QUANTITY]),
+                    notes=rec[self.M_NOTES],
                 )
-                raise e
+                for rec in all_records
+            ]
+            return records
+        except Exception as e:
+            logger.error(f"Failed to get_all_market_log_entries: {e}", exc_info=True)
+            raise e
