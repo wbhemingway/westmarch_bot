@@ -287,9 +287,12 @@ class SheetManager:
                 if int(record[self.C_H_PLAYER_ID]) == player_id
             ),
             -1,
+        cell = await asyncio.to_thread(
+            self.char_sheet.find, str(player_id), in_column=self.c_player_id
         )
 
         if record_index == -1:
+        if not cell:
             raise CharacterNotFound(f"No character found with ID {player_id}")
 
         # +2 to account for header row and 0-based index
@@ -297,6 +300,7 @@ class SheetManager:
         await asyncio.to_thread(
             self.char_sheet.update_cell,
             row_to_update,
+            cell.row,
             self.c_currency,
             str(new_curr),
         )
