@@ -40,45 +40,37 @@ class ScribeCog(commands.Cog):
         start_lvl: Optional[int],
     ):
         await interaction.response.defer(ephemeral=True)
-
-        try:
-            player_id = new_user.id
-
-            char_data = await self.sheet_manager.create_new_character(
-                char_name, player_id, start_lvl
-            )
-
-            embed = create_character_embed(
-                interaction, char_data, "New character successfully created!"
-            )
-
-            await interaction.followup.send(embed=embed)
-        except CharacterAlreadyExists:
-            await interaction.followup.send(
-                "This user already has a character. Cannot create a new one."
-            )
-        except Exception as e:
-            logger.error(
-                f"Error in create_character command for {new_user.id}: {e}",
-                exc_info=True,
-            )
-            await interaction.followup.send(
-                "An error occurred while making the character. Please contact a staff member."
-            )
+        player_id = new_user.id
+        char_data = await self.sheet_manager.create_new_character(
+            char_name, player_id, start_lvl
+        )
+        embed = create_character_embed(
+            interaction, char_data, "New character successfully created!"
+        )
+        await interaction.followup.send(embed=embed)
 
     async def cog_app_command_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ):
         """Handles errors for all commands in this cog."""
-        if isinstance(error, app_commands.MissingRole):
-            await interaction.response.send_message(
-                "You do not have the required 'Scribe' role to use this command.",
-                ephemeral=True,
-            )
-        else:
-            logger.error(
-                f"An unhandled error occurred in ScribeCog: {error}", exc_info=True
-            )
+        user_error_map = {
+            app_commands.MissingRole: "You do not have the required 'Scribe' role to use this command.",
+            CharacterAlreadyExists: "This user already has a character. Cannot create a new one.",
+        }
+        original_error = getattr(error, "original", error)
+
+        for error_type, message in user_error_map.items():
+            if isinstance(original_error, error_type):
+                await interaction.followup.send(message, ephemeral=True)
+                return
+
+        logger.error(
+            f"An unhandled error occurred in ScribeCog: {error}", exc_info=True
+        )
+        await interaction.followup.send(
+            "An error occurred while making the character. Please contact a staff member.",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: DnDBot):
