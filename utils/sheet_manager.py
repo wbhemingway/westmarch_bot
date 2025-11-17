@@ -14,6 +14,19 @@ from utils.models import Character, Item, MarketLog
 logger = logging.getLogger(__name__)
 
 
+TIER_GP_MAP_DATA = [
+    (config.T1_SET, config.GP_PER_GAME_T1),
+    (config.T2_SET, config.GP_PER_GAME_T2),
+    (config.T3_SET, config.GP_PER_GAME_T3),
+    (config.T4_SET, config.GP_PER_GAME_T4),
+    (config.T5_SET, config.GP_PER_GAME_T5),
+]
+
+TIER_GP_MAP = {
+    level: gold for level_set, gold in TIER_GP_MAP_DATA for level in level_set
+}
+
+
 class SheetManager:
     # Character sheet header names
     C_H_PLAYER_ID = "player id"
@@ -33,6 +46,15 @@ class SheetManager:
     M_PRICE = "price"
     M_QUANTITY = "quantity"
     M_NOTES = "notes"
+    # GameLog header names
+    G_DATE = "date"
+    G_DM_ID = "dm id"
+    G_PID_1 = "p1 id"
+    G_ID_2 = "p2 id"
+    G_ID_3 = "p3 id"
+    G_ID_4 = "p4 id"
+    G_ID_5 = "p5 id"
+    G_ID_6 = "p6 id"
 
     def __init__(self, credentials_file: str, sheet_name: str):
         scopes = [
@@ -48,6 +70,7 @@ class SheetManager:
         self.char_sheet = None
         self.item_sheet = None
         self.market_sheet = None
+        self.game_sheet = None
 
         self.lock = asyncio.Lock()
 
@@ -69,6 +92,15 @@ class SheetManager:
         self.m_price = None
         self.m_quantity = None
         self.m_notes = None
+        # GameLog column indexes
+        self.g_date = None
+        self.g_dm_id = None
+        self.g_pid_1 = None
+        self.g_pid_2 = None
+        self.g_pid_3 = None
+        self.g_pid_4 = None
+        self.g_pid_5 = None
+        self.g_pid_6 = None
 
     async def connect(self):
         """
@@ -85,10 +117,13 @@ class SheetManager:
             self.market_sheet = await asyncio.to_thread(
                 self.workbook.worksheet, "MarketLog"
             )
+            self.game_sheet = await asyncio.to_thread(
+                self.workbook.worksheet, "GameLog"
+            )
 
             logger.info("SheetManager connecting and loading header indexes...")
-            c_headers = await asyncio.to_thread(self.char_sheet.row_values, 1)
 
+            c_headers = await asyncio.to_thread(self.char_sheet.row_values, 1)
             self.c_player_id = c_headers.index(self.C_H_PLAYER_ID) + 1
             self.c_char_name = c_headers.index(self.C_H_CHAR_NAME) + 1
             self.c_char_id = c_headers.index(self.C_H_CHAR_ID) + 1
@@ -110,30 +145,32 @@ class SheetManager:
             self.m_quantity = m_headers.index(self.M_QUANTITY) + 1
             self.m_notes = m_headers.index(self.M_NOTES) + 1
 
+            g_headers = await asyncio.to_thread(self.game_sheet.row_values, 1)
+            self.g_date = g_headers.index(self.G_DATE) + 1
+            self.g_dm_id = g_headers.index(self.G_DM_ID) + 1
+            self.g_pid_1 = g_headers.index(self.G_PID_1) + 1
+            self.g_pid_2 = g_headers.index(self.G_ID_2) + 1
+            self.g_pid_3 = g_headers.index(self.G_ID_3) + 1
+            self.g_pid_4 = g_headers.index(self.G_ID_4) + 1
+            self.g_pid_5 = g_headers.index(self.G_ID_5) + 1
+            self.g_pid_6 = g_headers.index(self.G_ID_6) + 1
+
         except Exception as e:
             logger.error(
                 f"Failed to connect to Google Sheet or find headers: {e}", exc_info=True
             )
             raise e
 
-    async def _getlvl(self, exp: int) -> int:
+    def _getlvl(self, exp: int) -> int:
         return exp // config.XP_PER_LEVEL + 1
 
-    async def _get_starting_gold(self, lvl: int) -> int:
+    def _get_starting_gold(self, lvl: int) -> int:
         if lvl < 3:
             return 0
 
-        level_to_gold_map = {
-            **{level: config.GP_PER_GAME_T1 for level in config.T1_SET},
-            **{level: config.GP_PER_GAME_T2 for level in config.T2_SET},
-            **{level: config.GP_PER_GAME_T3 for level in config.T3_SET},
-            **{level: config.GP_PER_GAME_T4 for level in config.T4_SET},
-            **{level: config.GP_PER_GAME_T5 for level in config.T5_SET},
-        }
-
         total_gold = config.STARTING_GOLD
         for level in range(3, lvl):
-            total_gold += level_to_gold_map.get(level, 0) * 4
+            total_gold += TIER_GP_MAP.get(level, 0) * 4
 
         return total_gold
 
@@ -208,6 +245,36 @@ class SheetManager:
             )
 
     @with_lock
+    async def get_characters_by_ids(self, player_ids: list[int]) -> list[Character]:
+        """
+        Gets all information for multiple characters in a single sheet read.
+        """
+        if not player_ids:
+            return []
+
+        all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
+        player_id_set = set(player_ids)
+        found_characters = []
+        found_player_ids = set()
+
+        for record in all_records:
+            try:
+                record_player_id = int(record[self.C_H_PLAYER_ID])
+                if record_player_id in player_id_set:
+                    char = await self._record_to_character(record)
+                    found_characters.append(char)
+                    found_player_ids.add(record_player_id)
+            except (ValueError, KeyError):
+                continue
+
+        missing_ids = player_id_set - found_player_ids
+        if missing_ids:
+            logger.warning(f"Character lookup failed for player IDs: {missing_ids}")
+            raise CharacterNotFound("Could not find characters for some players.")
+
+        return found_characters
+
+    @with_lock
     async def set_character_currency(self, player_id: int, new_curr: int):
         """
         Updates a character's currency using a lock and a row lookup.
@@ -258,7 +325,7 @@ class SheetManager:
         char_id = int(time.time() * 1000)
 
         starting_xp = (final_start_lvl - 1) * config.XP_PER_LEVEL
-        starting_gold = await self._get_starting_gold(final_start_lvl)
+        starting_gold = self._get_starting_gold(final_start_lvl)
 
         data_row = [
             char_name,
@@ -316,3 +383,53 @@ class SheetManager:
             for rec in all_records
         ]
         return records
+
+    @with_lock
+    async def log_game(self, dm_id: int, players: list[Character]) -> None:
+        """
+        Awards XP and Gold to a list of characters for playing a game.
+        This is optimized to read the sheet once and write updates in a batch.
+        """
+        all_records = await asyncio.to_thread(self.char_sheet.get_all_records)
+
+        player_ids_str = [str(p.player_id) for p in players]
+        cells_to_update = []
+        player_ids_in_game = set(player_ids_str)
+        for i, record in enumerate(all_records):
+            try:
+                record_player_id = str(record[self.C_H_PLAYER_ID])
+            except (ValueError, KeyError):
+                continue
+            if record_player_id in player_ids_in_game:
+                # +2 for header row and 0-based index
+                row_index = i + 2
+
+                current_xp = int(record[self.C_H_XP])
+                current_lvl = int(record[self.C_H_LEVEL])
+                current_gold = int(record[self.C_H_CURRENCY])
+                gold_reward = TIER_GP_MAP.get(current_lvl, 0)
+
+                new_xp = current_xp + config.XP_PER_GAME
+                new_lvl = self._getlvl(new_xp)
+                new_gold = current_gold + gold_reward
+
+                cells_to_update.append(gspread.Cell(row_index, self.c_xp, str(new_xp)))
+                cells_to_update.append(
+                    gspread.Cell(row_index, self.c_level, str(new_lvl))
+                )
+                cells_to_update.append(
+                    gspread.Cell(row_index, self.c_currency, str(new_gold))
+                )
+
+        if cells_to_update:
+            await asyncio.to_thread(self.char_sheet.update_cells, cells_to_update)
+            logger.info(
+                f"Logged game for {len(players)} players. Applied {len(cells_to_update)} cell updates."
+            )
+            cur_date = date.today().strftime("%Y-%m-%d")
+            row_data = [
+                cur_date,
+                str(dm_id),
+            ]
+            row_data.extend(player_ids_str)
+            await asyncio.to_thread(self.game_sheet.append_row, row_data)
